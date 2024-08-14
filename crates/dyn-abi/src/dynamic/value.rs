@@ -103,6 +103,13 @@ impl From<Address> for DynSolValue {
     }
 }
 
+impl From<[u8; 20]> for DynSolValue {
+    #[inline]
+    fn from(value: [u8; 20]) -> Self {
+        Self::Address(value.into())
+    }
+}
+
 impl From<bool> for DynSolValue {
     #[inline]
     fn from(value: bool) -> Self {
@@ -686,7 +693,7 @@ impl DynSolValue {
     /// See [`abi_encode_packed`](Self::abi_encode_packed) for more details.
     pub fn abi_encode_packed_to(&self, buf: &mut Vec<u8>) {
         match self {
-            Self::Address(addr) => buf.extend_from_slice(addr.as_slice()),
+            Self::Address(addr) => buf.extend_from_slice(addr.last_20_bytes()),
             Self::Function(func) => buf.extend_from_slice(func.as_slice()),
             Self::Bool(b) => buf.push(*b as u8),
             Self::String(s) => buf.extend_from_slice(s.as_bytes()),

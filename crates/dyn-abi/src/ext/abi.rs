@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(decoded, [DynSolValue::Uint(U256::from(1u8), 256)]);
 
         // Fail on wrong response type
-        let bad_response = Address::repeat_byte(3u8).to_vec();
+        let bad_response = Address::repeat_byte(3u8).last_20_bytes().to_vec();
         assert!(func.abi_decode_output(&bad_response, true).is_err());
         assert!(func.abi_decode_output(&bad_response, false).is_err());
     }

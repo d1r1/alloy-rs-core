@@ -460,7 +460,27 @@ fn fixed_bytes<'i>(len: usize) -> impl Parser<Input<'i>, Word, ContextError> {
 
 #[inline]
 fn address(input: &mut Input<'_>) -> PResult<Address> {
-    trace("address", hex_str.try_map(hex::FromHex::from_hex)).parse_next(input)
+    trace("address", |input: &mut Input| {
+        let hex_string = hex_str(input)?;
+        match hex_string.len() {
+            40 => {
+                let bytes: [u8; 20] =
+                    hex::FromHex::from_hex(&hex_string).map_err(|e| hex_error(&hex_string, e))?;
+                Ok(Address::from_slice(&bytes))
+            }
+            66 => {
+                let bytes: [u8; 33] =
+                    hex::FromHex::from_hex(&hex_string).map_err(|e| hex_error(&hex_string, e))?;
+                Ok(Address::new(bytes))
+            }
+            _ => Err(ErrMode::from_external_error(
+                input,
+                ErrorKind::Verify,
+                Error::InvalidFixedBytesLength(hex_string.len()),
+            )),
+        }
+    })
+    .parse_next(input)
 }
 
 #[inline]

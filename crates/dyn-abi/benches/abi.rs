@@ -154,10 +154,10 @@ fn encode_struct_input() -> Input {
 fn encode_struct_input_tokens() -> [ethabi::Token; 8] {
     let input = encode_struct_input();
     [
-        ethabi::Token::Address(input.tokenIn.0 .0.into()),
-        ethabi::Token::Address(input.tokenOut.0 .0.into()),
+        ethabi::Token::Address(input.tokenIn.last_20_bytes().into()),
+        ethabi::Token::Address(input.tokenOut.last_20_bytes().into()),
         ethabi::Token::Uint(input.fee.into()),
-        ethabi::Token::Address(input.recipient.0 .0.into()),
+        ethabi::Token::Address(input.recipient.last_20_bytes().into()),
         ethabi::Token::Uint(ethabi::Uint::from_big_endian(&input.deadline.to_be_bytes_vec())),
         ethabi::Token::Uint(ethabi::Uint::from_big_endian(&input.amountIn.to_be_bytes_vec())),
         ethabi::Token::Uint(ethabi::Uint::from_big_endian(

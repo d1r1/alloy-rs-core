@@ -3,7 +3,20 @@ use alloc::{
     borrow::Borrow,
     string::{String, ToString},
 };
-use core::{fmt, mem::MaybeUninit, str};
+#[cfg(feature = "rlp")]
+use alloy_rlp;
+
+#[cfg(feature = "serde")]
+use serde;
+
+use core::{
+    cmp::Ordering,
+    fmt,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+    str::{self, FromStr},
+};
+use ruint::{Bits, Uint};
 
 /// Error type for address checksum validation.
 #[derive(Clone, Copy, Debug)]
@@ -83,20 +96,137 @@ wrap_fixed_bytes!(
     /// // Format the address without the checksum
     /// assert_eq!(format!("{address:?}"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
     /// ```
-    pub struct Address<20>;
+    pub struct AddressInner<33>;
 );
 
-impl From<U160> for Address {
+/// 33 byte length address.
+#[derive(Clone, Default, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Address(pub AddressInner);
+
+impl Address {
+    /// The zero address.
+    pub const ZERO: Self = Self(AddressInner::ZERO);
+
     #[inline]
-    fn from(value: U160) -> Self {
-        Self(FixedBytes(value.to_be_bytes()))
+    /// Creates a new address from a N-byte slice (N = 20 | 33).
+    pub const fn new<const N: usize>(bytes: [u8; N]) -> Self {
+        match N {
+            20 => {
+                let mut padded = [0u8; 33];
+                let mut i = 0;
+                while i < 20 {
+                    padded[i + 13] = bytes[i];
+                    i += 1;
+                }
+                Self(AddressInner::new(padded))
+            }
+            33 => {
+                let mut padded = [0u8; 33];
+                let mut i = 0;
+                while i < 33 {
+                    padded[i] = bytes[i];
+                    i += 1;
+                }
+                Self(AddressInner::new(padded))
+            }
+            _ => panic!("Invalid address length"),
+        }
+    }
+
+    /// Creates a new address from slice.
+    #[inline]
+    #[track_caller]
+    pub fn from_slice<T: AsRef<[u8]>>(bytes: T) -> Self {
+        let bytes = bytes.as_ref();
+        match bytes.len() {
+            20 => {
+                let mut padded = [0u8; 33];
+                let start = 33 - 20;
+                padded[start..].copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            33 => {
+                let mut padded = [0u8; 33];
+                padded.copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            _ => panic!("Invalid address length: expected 20 or 33 bytes"),
+        }
+    }
+
+    /// Returns the last 20 bytes of the address (ethereum format).
+    #[inline]
+    pub fn last_20_bytes(&self) -> &[u8; 20] {
+        self.0[13..].try_into().unwrap()
+    }
+
+    #[inline]
+    pub const fn with_last_byte(x: u8) -> Self {
+        Self(AddressInner::with_last_byte(x))
+    }
+
+    // TODO: d1r1 add doc. Should we repeat the byte only 20 times or 33?
+    #[inline]
+    pub const fn repeat_byte(byte: u8) -> Self {
+        let mut bytes = [0u8; 33];
+        let mut i = 13;
+        while i < 33 {
+            bytes[i] = byte;
+            i += 1;
+        }
+        Self(AddressInner::new(bytes))
+    }
+
+    #[inline]
+    pub const fn len_bytes() -> usize {
+        AddressInner::len_bytes()
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn left_padding_from(value: &[u8]) -> Self {
+        Self(AddressInner::left_padding_from(value))
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn right_padding_from(value: &[u8]) -> Self {
+        Self(AddressInner::right_padding_from(value))
+    }
+
+    #[inline]
+    pub const fn into_array(self) -> [u8; 33] {
+        self.0.into_array()
+    }
+
+    #[inline]
+    pub fn covers(&self, b: &Self) -> bool {
+        self.0.covers(&b.0)
+    }
+
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        self.0.const_eq(&other.0)
+    }
+
+    pub const fn bit_and(self, rhs: Self) -> Self {
+        Self(self.0.bit_and(rhs.0))
+    }
+
+    pub const fn bit_or(self, rhs: Self) -> Self {
+        Self(self.0.bit_or(rhs.0))
+    }
+
+    pub const fn bit_xor(self, rhs: Self) -> Self {
+        Self(self.0.bit_xor(rhs.0))
     }
 }
 
-impl From<Address> for U160 {
-    #[inline]
-    fn from(value: Address) -> Self {
-        Self::from_be_bytes(value.0 .0)
+impl fmt::Debug for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Display the raw bytes without checksum
+        // Right now we are using only last 20 bytes
+        // TODO: d1r1 (probably we should print full address)
+        f.write_str(&format!("0x{}", hex::encode(&self.0[13..])))
     }
 }
 
@@ -116,6 +246,338 @@ impl fmt::Display for Address {
     }
 }
 
+impl AsRef<[u8; 33]> for Address {
+    #[inline]
+    fn as_ref(&self) -> &[u8; 33] {
+        self.0.as_ref()
+    }
+}
+
+impl AsMut<[u8; 33]> for Address {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [u8; 33] {
+        self.0.as_mut()
+    }
+}
+
+impl AsRef<[u8]> for Address {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl AsMut<[u8]> for Address {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut()
+    }
+}
+
+impl Deref for Address {
+    type Target = AddressInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Address {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromStr for Address {
+    type Err = AddressError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.strip_prefix("0x").unwrap_or(s);
+        match s.len() {
+            40 => {
+                let mut bytes = [0u8; 33];
+                hex::decode_to_slice(s, &mut bytes[13..])?;
+                Ok(Address(AddressInner::new(bytes)))
+            }
+            66 => {
+                let mut bytes = [0u8; 33];
+                hex::decode_to_slice(s, &mut bytes)?;
+                Ok(Address(AddressInner::new(bytes)))
+            }
+            _ => Err(AddressError::Hex(hex::FromHexError::InvalidStringLength)),
+        }
+    }
+}
+
+impl From<U160> for Address {
+    #[inline]
+    fn from(value: U160) -> Self {
+        Self::from_slice(&value.to_be_bytes::<20>())
+    }
+}
+
+impl From<Address> for U160 {
+    #[inline]
+    fn from(value: Address) -> Self {
+        let bytes = value.0.as_slice();
+        Self::from_be_bytes::<33>(bytes[33 - 20..].try_into().unwrap())
+    }
+}
+
+impl From<Uint<264, 5>> for Address {
+    #[inline]
+    fn from(value: Uint<264, 5>) -> Self {
+        Self::from(&value.to_be_bytes::<33>())
+    }
+}
+impl From<Bits<264, 5>> for Address {
+    #[inline]
+    fn from(value: Bits<264, 5>) -> Self {
+        Self::from(&value.to_be_bytes::<33>())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Address {
+    fn from(bytes: [u8; N]) -> Self {
+        match N {
+            20 => {
+                let mut padded = [0u8; 33];
+                padded[13..].copy_from_slice(&bytes);
+                Self(AddressInner::new(padded))
+            }
+            33 => {
+                let mut padded = [0u8; 33];
+                padded.copy_from_slice(&bytes);
+                Self(AddressInner::new(padded))
+            }
+            _ => panic!("Invalid address length: expected 20 or 33 bytes"),
+        }
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for Address {
+    fn from(bytes: &[u8; N]) -> Self {
+        match N {
+            20 => {
+                let mut padded = [0u8; 33];
+                padded[13..].copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            33 => {
+                let mut padded = [0u8; 33];
+                padded.copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            _ => panic!("Invalid address length: expected 20 or 33 bytes"),
+        }
+    }
+}
+
+impl<const N: usize> From<&mut [u8; N]> for Address {
+    fn from(bytes: &mut [u8; N]) -> Self {
+        match N {
+            20 => {
+                let mut padded = [0u8; 33];
+                padded[13..].copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            33 => {
+                let mut padded = [0u8; 33];
+                padded.copy_from_slice(bytes);
+                Self(AddressInner::new(padded))
+            }
+            _ => panic!("Invalid address length: expected 20 or 33 bytes"),
+        }
+    }
+}
+
+impl<const N: usize> From<FixedBytes<N>> for Address
+where
+    [(); N]: Sized,
+{
+    #[inline]
+    fn from(value: FixedBytes<N>) -> Self {
+        match N {
+            20 => Self::from(value.deref()),
+            33 => Self::from(value.deref()),
+            _ => panic!("Invalid FixedBytes length for Address conversion"),
+        }
+    }
+}
+
+impl<const N: usize> TryFrom<Address> for FixedBytes<N>
+where
+    [(); N]: Sized,
+{
+    type Error = &'static str;
+
+    #[inline]
+    fn try_from(value: Address) -> Result<Self, Self::Error> {
+        let addr = value.as_slice();
+        match N {
+            20 => {
+                let mut res = [0u8; N];
+                res.copy_from_slice(&addr[33 - N..]);
+                Ok(FixedBytes(res))
+            }
+            33 => {
+                let mut res = [0u8; N];
+                res.copy_from_slice(addr);
+                Ok(FixedBytes(res))
+            }
+            _ => Err("Invalid FixedBytes length for Address conversion"),
+        }
+    }
+}
+
+// Borrow
+impl Borrow<[u8; 20]> for Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 20] {
+        unsafe { &*(self.0 .0[13..].as_ptr() as *const [u8; 20]) }
+    }
+}
+
+impl Borrow<[u8; 20]> for &Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 20] {
+        unsafe { &*(self.0 .0[13..].as_ptr() as *const [u8; 20]) }
+    }
+}
+
+impl Borrow<[u8; 20]> for &mut Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 20] {
+        unsafe { &*(self.0 .0[13..].as_ptr() as *const [u8; 20]) }
+    }
+}
+impl Borrow<[u8; 33]> for Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 33] {
+        unsafe { &*(self.0 .0.as_ptr() as *const [u8; 33]) }
+    }
+}
+
+impl Borrow<[u8; 33]> for &Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 33] {
+        unsafe { &*(self.0 .0.as_ptr() as *const [u8; 33]) }
+    }
+}
+
+impl Borrow<[u8; 33]> for &mut Address {
+    #[inline]
+    fn borrow(&self) -> &[u8; 33] {
+        unsafe { &*(self.0 .0.as_ptr() as *const [u8; 33]) }
+    }
+}
+
+// PartialEq
+
+impl PartialEq<Address> for [u8] {
+    fn eq(&self, other: &Address) -> bool {
+        self == other.as_slice()
+    }
+}
+
+impl PartialEq<[u8]> for Address {
+    #[inline]
+    fn eq(&self, other: &[u8]) -> bool {
+        PartialEq::eq(&self.0, other)
+    }
+}
+
+impl PartialEq<[u8; 33]> for Address {
+    #[inline]
+    fn eq(&self, other: &[u8; 33]) -> bool {
+        PartialEq::eq(&self.0, other)
+    }
+}
+
+impl PartialEq<[u8; 20]> for Address {
+    #[inline]
+    fn eq(&self, other: &[u8; 20]) -> bool {
+        self.0[13..].eq(other)
+    }
+}
+
+// PartialOrd
+
+impl PartialOrd<[u8]> for Address {
+    #[inline]
+    fn partial_cmp(&self, other: &[u8]) -> Option<Ordering> {
+        PartialOrd::partial_cmp(&self.0, other)
+    }
+}
+
+impl hex::FromHex for Address {
+    type Error = hex::FromHexError;
+    #[inline]
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Ok(Self(AddressInner::from_hex(hex)?))
+    }
+}
+
+#[cfg(feature = "rlp")]
+impl alloy_rlp::Decodable for Address {
+    #[inline]
+    fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+        Ok(Self(AddressInner::decode(buf)?))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Address {
+    #[inline]
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Address {
+    #[inline]
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(AddressInner::deserialize(deserializer)?))
+    }
+}
+#[cfg(feature = "arbitrary")]
+use crate::private::{arbitrary, proptest};
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Address {
+    #[inline]
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut bytes = [0u8; 33];
+        u.fill_buffer(&mut bytes[13..])?;
+        Ok(Self::new(bytes))
+    }
+
+    #[inline]
+    fn size_hint(depth: usize) -> (usize, Option<usize>) {
+        arbitrary::size_hint::and_all(&[arbitrary::size_hint::recursion_guard(depth, |depth| {
+            AddressInner::size_hint(depth)
+        })])
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl proptest::arbitrary::Arbitrary for Address {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    #[inline]
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        use proptest::strategy::Strategy;
+        (proptest::array::uniform20(proptest::arbitrary::any::<u8>()))
+            .prop_map(|last_20_bytes| {
+                let mut bytes = [0u8; 33];
+                bytes[13..].copy_from_slice(&last_20_bytes);
+                Self::new(bytes)
+            })
+            .boxed()
+    }
+}
+
 impl Address {
     /// Creates an Ethereum address from an EVM word's upper 20 bytes
     /// (`word[12..]`).
@@ -130,7 +592,9 @@ impl Address {
     #[inline]
     #[must_use]
     pub fn from_word(word: FixedBytes<32>) -> Self {
-        Self(FixedBytes(word[12..].try_into().unwrap()))
+        Self::from(FixedBytes::<20>(
+            word[12..].try_into().expect("Eth address exactly 20 bytes long"),
+        ))
     }
 
     /// Left-pads the address to 32 bytes (EVM word size).
@@ -148,7 +612,7 @@ impl Address {
     #[must_use]
     pub fn into_word(&self) -> FixedBytes<32> {
         let mut word = [0; 32];
-        word[12..].copy_from_slice(self.as_slice());
+        word[12..].copy_from_slice(self.last_20_bytes());
         FixedBytes(word)
     }
 
@@ -186,7 +650,12 @@ impl Address {
             }
 
             let address: Address = s.parse()?;
-            if s == address.to_checksum_buffer(chain_id).as_str() {
+
+            // For compatability with eth address we can just trim
+            // the first 13 bytes. We need checksum only in eth.
+            // TODO: d1r1 check if it's true.
+            let trimmed_s = s.replacen("0x00000000000000000000000000", "0x", 1);
+            if trimmed_s == address.to_checksum_buffer(chain_id).as_str() {
                 Ok(address)
             } else {
                 Err(AddressError::InvalidChecksum)
@@ -294,7 +763,7 @@ impl Address {
     fn to_checksum_inner(&self, buf: &mut [u8; 42], chain_id: Option<u64>) {
         buf[0] = b'0';
         buf[1] = b'x';
-        hex::encode_to_slice(self, &mut buf[2..]).unwrap();
+        hex::encode_to_slice(self.last_20_bytes(), &mut buf[2..]).unwrap();
 
         let mut hasher = crate::Keccak256::new();
         match chain_id {
@@ -355,7 +824,7 @@ impl Address {
 
         // address header + address
         out[1] = EMPTY_STRING_CODE + 20;
-        out[2..22].copy_from_slice(self.as_slice());
+        out[2..22].copy_from_slice(self.last_20_bytes());
 
         // nonce
         nonce.encode(&mut &mut out[22..]);
@@ -432,7 +901,7 @@ impl Address {
         // much better than calling `Keccak::update` multiple times
         let mut bytes = [0; 85];
         bytes[0] = 0xff;
-        bytes[1..21].copy_from_slice(self.as_slice());
+        bytes[1..21].copy_from_slice(self.last_20_bytes());
         bytes[21..53].copy_from_slice(salt);
         bytes[53..85].copy_from_slice(init_code_hash);
         let hash = keccak256(bytes);
@@ -546,7 +1015,20 @@ mod tests {
 
     #[test]
     fn parse() {
-        let expected = hex!("0102030405060708090a0b0c0d0e0f1011121314");
+        let expected = hex!("000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314");
+        assert_eq!(
+            "000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314"
+                .parse::<Address>()
+                .unwrap()
+                .into_array(),
+            expected
+        );
+        assert_eq!(
+            "0x000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314"
+                .parse::<Address>()
+                .unwrap(),
+            expected
+        );
         assert_eq!(
             "0102030405060708090a0b0c0d0e0f1011121314".parse::<Address>().unwrap().into_array(),
             expected
@@ -572,12 +1054,19 @@ mod tests {
             "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
             "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
             "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+            // 33 bytes
+            "0x0000000000000000000000000052908400098527886E0F7030069857D2E4169EE7",
+            "0x00000000000000000000000000de709f2102306220921060314715629080e2fb77",
+            "0x000000000000000000000000005aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
         ];
         for addr in addresses {
             let parsed1: Address = addr.parse().unwrap();
             let parsed2 = Address::parse_checksummed(addr, None).unwrap();
             assert_eq!(parsed1, parsed2);
-            assert_eq!(parsed2.to_checksum(None), addr);
+            assert_eq!(
+                parsed2.to_checksum(None),
+                addr.replacen("0x00000000000000000000000000", "0x", 1)
+            );
         }
     }
 
@@ -668,6 +1157,7 @@ mod tests {
             use alloy_rlp::Encodable;
 
             let mut out = vec![];
+            let address = address.last_20_bytes();
 
             alloy_rlp::Header { list: true, payload_length: address.length() + nonce.length() }
                 .encode(&mut out);

@@ -823,7 +823,7 @@ macro_rules! bytes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{hex, Address, Bytes, FixedBytes};
+    use crate::{bits::address::AddressInner, hex, Address, Bytes, FixedBytes};
 
     #[test]
     fn bytes_macros() {
@@ -847,11 +847,15 @@ mod tests {
         assert_eq!(A0, Address::ZERO);
 
         const A1: Address = address!("0102030405060708090a0b0c0d0e0f1011121314");
-        const A2: Address = Address(fixed_bytes!("0102030405060708090a0b0c0d0e0f1011121314"));
-        const A3: Address = Address(FixedBytes(hex!("0102030405060708090a0b0c0d0e0f1011121314")));
+        const A2: Address = Address(AddressInner(fixed_bytes!(
+            "000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314"
+        )));
+        const A3: Address = Address(AddressInner(FixedBytes(hex!(
+            "000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314"
+        ))));
         assert_eq!(A1, A2);
         assert_eq!(A1, A3);
-        assert_eq!(A1, hex!("0102030405060708090a0b0c0d0e0f1011121314"));
+        assert_eq!(A1, hex!("000000000000000000000000000102030405060708090a0b0c0d0e0f1011121314"));
 
         static B: Bytes = bytes!("112233");
         assert_eq!(B[..], [0x11, 0x22, 0x33]);
