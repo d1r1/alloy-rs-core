@@ -6,6 +6,8 @@ use alloc::{
 #[cfg(feature = "rlp")]
 use alloy_rlp;
 
+use alloy_primitives_old;
+
 #[cfg(feature = "serde")]
 use serde;
 
@@ -221,6 +223,18 @@ impl Address {
     }
 }
 
+impl From<alloy_primitives_old::Address> for Address {
+    fn from(value: alloy_primitives_old::Address) -> Self {
+        Self::from_slice(value.as_slice())
+    }
+}
+
+impl From<Address> for alloy_primitives_old::Address {
+    fn from(value: Address) -> alloy_primitives_old::Address {
+        alloy_primitives_old::Address::from_slice(value.last_20_bytes())
+    }
+}
+
 impl fmt::Debug for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display the raw bytes without checksum
@@ -244,6 +258,35 @@ impl fmt::Display for Address {
             f.write_str(checksum)
         }
     }
+}
+
+#[cfg(feature = "rlp")]
+impl alloy_rlp::Decodable for Address {
+    #[inline]
+    fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+        Ok(Self(AddressInner::decode(buf)?))
+    }
+}
+
+#[cfg(feature = "rlp")]
+impl alloy_rlp::Encodable for Address {
+    #[inline]
+    fn length(&self) -> usize {
+        self.0.length()
+    }
+
+    #[inline]
+    fn encode(&self, out: &mut dyn bytes::BufMut) {
+        self.0.encode(out)
+    }
+}
+
+#[cfg(feature = "rlp")]
+unsafe impl alloy_rlp::MaxEncodedLen<{ 33 + alloy_rlp::length_of_length(33) }> for Address {}
+
+#[cfg(feature = "rlp")]
+unsafe impl alloy_rlp::MaxEncodedLenAssoc for Address {
+    const LEN: usize = { 33 + alloy_rlp::length_of_length(33) };
 }
 
 impl AsRef<[u8; 33]> for Address {
@@ -515,14 +558,6 @@ impl hex::FromHex for Address {
     #[inline]
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         Ok(Self(AddressInner::from_hex(hex)?))
-    }
-}
-
-#[cfg(feature = "rlp")]
-impl alloy_rlp::Decodable for Address {
-    #[inline]
-    fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-        Ok(Self(AddressInner::decode(buf)?))
     }
 }
 

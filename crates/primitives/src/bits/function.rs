@@ -1,8 +1,6 @@
 use crate::{Address, FixedBytes, Selector};
 use core::borrow::Borrow;
 
-use super::address;
-
 wrap_fixed_bytes! {
     /// An Ethereum ABI function pointer, 24 bytes in length.
     ///
@@ -61,21 +59,16 @@ impl Function {
 
     /// Returns references to the address and selector of the function.
     #[inline]
-    pub fn as_address_and_selector(&self) -> (Address, &Selector) {
-        let address: Address = Address::from_slice(&self.0[..20]);
-
+    pub fn as_address_and_selector(&self) -> (&Address, &Selector) {
         // SAFETY: Function (24) = Address (20) + Selector (4)
-
-        let selector = unsafe { &*(self.0[20..].as_ptr() as *const Selector) };
-
-        (address, selector)
+        unsafe { (&*self.as_ptr().cast(), &*self.as_ptr().add(20).cast()) }
     }
 
     /// Returns the address and selector of the function.
     #[inline]
     pub fn to_address_and_selector(&self) -> (Address, Selector) {
         let (a, s) = self.as_address_and_selector();
-        (a, *s)
+        (*a, *s)
     }
 }
 
@@ -94,11 +87,11 @@ mod tests {
         ));
 
         let (a1, s1) = f.as_address_and_selector();
-        assert_eq!(a1, address!("ffffffffffffffffffffffffffffffffffffffff"));
+        assert_eq!(a1, hex!("ffffffffffffffffffffffffffffffffffffffff"));
         assert_eq!(s1, &hex!("12345678"));
 
         let (a2, s2) = f.to_address_and_selector();
-        assert_eq!(*a2, *a1);
+        assert_eq!(a2, *a1);
         assert_eq!(s2, *s1);
     }
 }
